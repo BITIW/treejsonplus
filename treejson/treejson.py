@@ -1,79 +1,50 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-# The MIT License (MIT)
-#
-# Copyright (c) 2016 Richard Tuin
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-
 import json
-import getopt
+import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def treejson():
-    opts, args = getopt.getopt(sys.argv[1:], "L:h", ["help"])
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Отобразить структуру JSON в виде дерева.')
+    parser.add_argument('-L', '--level', type=int, default=999, help='Опуститься только на указанное количество уровней.')
+    parser.add_argument('-t', '--threads', type=int, default=4, help='Количество потоков для обработки.')
+    return parser.parse_args()
 
-    depth = 999
-    for opt, arg in opts:
-        if opt == "-L":
-            depth = int(arg)
-        if opt in ("--help", "-h"):
-            print "Usage: treejson [-L level] < example.json"
-            print "\nPossible arguments:"
-            print "  -L level\tDescend only level nodes deep."
-            sys.exit()
-
+def load_json():
     try:
-        structure = json.load(sys.stdin)
-    except ValueError:
-        print "Please feed me a valid JSON document."
+        return json.load(sys.stdin)
+    except json.JSONDecodeError:
+        print("Пожалуйста, предоставьте допустимый JSON-документ.", file=sys.stderr)
         sys.exit(1)
 
+def show_structure(root, depth, level=1, indent_chars=""):
+    tasks = []
+    with ThreadPoolExecutor() as executor:
+        if isinstance(root, list):
+            for i, value in enumerate(root):
+                display_key = str(i)
+                is_last = i == len(root) - 1
+                tasks.append(executor.submit(print_tree_node, display_key, value, indent_chars, is_last, depth, level))
+        elif isinstance(root, dict):
+            for i, (key, value) in enumerate(root.items()):
+                is_last = i == len(root) - 1
+                tasks.append(executor.submit(print_tree_node, key, value, indent_chars, is_last, depth, level))
 
-    def show_structure(root, level=1, indent_chars=""):
-        index = 0
+        for task in as_completed(tasks):
+            task.result()
 
-        use_index_as_key = isinstance(root, list)
+def print_tree_node(key, value, indent_chars, is_last, depth, level):
+    tree_char = '└── ' if is_last else '├── '
+    print(indent_chars + tree_char + key + (' []' if isinstance(value, list) else ''))
+    
+    if isinstance(value, (dict, list)) and level < depth:
+        new_indent_chars = indent_chars + ('    ' if is_last else '│   ')
+        show_structure(value, depth, level + 1, new_indent_chars)
 
-        for key in root:
-            if use_index_as_key:
-                value = key
-                key = str(index)
-            else:
-                value = root[key]
+def main():
+    args = parse_arguments()
+    Structure = load_json()
+    print("." + (" []" if isinstance(Structure, list) else ""))
+    show_structure(Structure, args.level)
 
-            has_children = hasattr(value, '__len__') and not isinstance(value, basestring)
-
-            if index+1 == len(root):
-                tree_char = u"└"
-            else:
-                tree_char = u"├"
-
-            print indent_chars + tree_char + u"── " + key + (" []" if isinstance(value, list) else "")
-
-            if has_children and level < depth:
-                if len(root) > 1 and index+1 < len(root):
-                    new_indent_chars = indent_chars + u"│" + "   "
-                else:
-                    new_indent_chars = indent_chars + "    "
-                show_structure(value, level=level+1, indent_chars=new_indent_chars)
-            index += 1
-
-    print "." + (" []" if isinstance(structure, list) else "")
-    show_structure(structure)
+if __name__ == "__main__":
+    main()
